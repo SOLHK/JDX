@@ -59,7 +59,7 @@ class BuildIntegrityTests(unittest.TestCase):
                 self.assertEqual(plist, {"Filter": {"Bundles": ["com.360buy.jdmobile"]}})
             with tarfile.open(fileobj=io.BytesIO(members["control.tar.gz"]), mode="r:gz") as archive:
                 control = archive.extractfile("./control").read().decode()
-                self.assertIn("Version: 0.2.0\n", control)
+                self.assertIn("Version: 0.2.1\n", control)
                 self.assertIn("Architecture: iphoneos-arm64\n", control)
 
     def test_ar_rejects_truncation_and_invalid_padding(self):

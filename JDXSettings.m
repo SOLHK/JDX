@@ -1,6 +1,8 @@
 #import "JDXSettings.h"
 #import "JDXConfig.h"
 #import "JDXDiagnostics.h"
+#import "JDXSettingsPage.h"
+#include "JDXSettingsPage.m"
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
 
@@ -57,7 +59,7 @@
 - (NSString *)tableView:(__unused UITableView *)tableView titleForFooterInSection:(NSInteger)section
 {
     if (section == 0)
-        return @"任意京东页面双指长按约一秒打开这里。开关自动保存，下次页面渲染生效；已移除的内容需刷新或重新进入页面。";
+        return @"京东「我的 → 设置」右上角点「JDX」进入；没有标准导航栏时点「JDX 设置」按钮。双指长按仍可作为备用入口。已移除的内容需刷新页面。";
     if (section == 1)
         return @"每个位置的开关：开启＝拦截，关闭＝保留。推荐配置保留正常商品推荐与搜索内容。全部拦截也会隐藏正常推荐区。";
     if (section == 6)
@@ -261,11 +263,27 @@ static UIViewController *JDXTopController(UIWindow *window)
     return controller;
 }
 
+static UIViewController *JDXVisibleSettingsPage(UIViewController *controller)
+{
+    // JD settings may contain a web/child controller. Inspect only the visible
+    // containment chain; do not inspect the page's cells or account contents.
+    for (NSUInteger depth = 0; controller && depth < 12; ++depth) {
+        if ([controller isKindOfClass:UINavigationController.class] ||
+            [controller isKindOfClass:UITabBarController.class]) break;
+        if (JDXIsJDSettingsPage(controller.navigationItem.title, controller.title,
+                                NSStringFromClass(controller.class))) return controller;
+        controller = controller.parentViewController;
+    }
+    return nil;
+}
+
 @interface JDXSettingsEntry : NSObject <UIGestureRecognizerDelegate>
 @property(nonatomic, strong) NSTimer *timer;
 @end
 
 static char JDXGestureKey;
+static char JDXNavigationShortcutKey;
+static char JDXFloatingShortcutKey;
 static JDXSettingsEntry *JDXEntry;
 
 @implementation JDXSettingsEntry
@@ -307,24 +325,22 @@ static JDXSettingsEntry *JDXEntry;
 {
     if ([notification.object isKindOfClass:UIWindow.class]) [self attachWindow:notification.object];
     for (UIWindow *window in [self windows]) [self attachWindow:window];
+    [self observePage];
 }
 
 - (BOOL)gestureRecognizer:(__unused UIGestureRecognizer *)gesture
         shouldRecognizeSimultaneouslyWithGestureRecognizer:(__unused UIGestureRecognizer *)other
 { return YES; }
 
-- (void)open:(UILongPressGestureRecognizer *)gesture
+- (void)presentSettingsFromController:(UIViewController *)controller source:(NSString *)source
 {
-    if (gesture.state != UIGestureRecognizerStateBegan) return;
-    UIWindow *window = [gesture.view isKindOfClass:UIWindow.class] ? (UIWindow *)gesture.view : gesture.view.window;
-    UIViewController *controller = JDXTopController(window);
-    if (!controller || !controller.viewIfLoaded.window ||
+    if (!controller || !controller.viewIfLoaded.window || controller.presentedViewController ||
         [controller isKindOfClass:JDXSettingsController.class] ||
         [controller isKindOfClass:UIAlertController.class] ||
         [controller.navigationController.viewControllers.firstObject isKindOfClass:JDXSettingsController.class])
         return;
     JDXRecordPage(NSStringFromClass(controller.class));
-    JDXLog(@"settings_opened", @{@"class": NSStringFromClass(controller.class)});
+    JDXLog(@"settings_opened", @{@"class": NSStringFromClass(controller.class), @"entry": source});
     JDXSettingsController *settings = [[JDXSettingsController alloc] initWithStyle:UITableViewStyleInsetGrouped];
     UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:settings];
     navigation.modalPresentationStyle = UIModalPresentationPageSheet;
@@ -332,16 +348,95 @@ static JDXSettingsEntry *JDXEntry;
     [controller presentViewController:navigation animated:YES completion:nil];
 }
 
+- (void)open:(UILongPressGestureRecognizer *)gesture
+{
+    if (gesture.state != UIGestureRecognizerStateBegan) return;
+    UIWindow *window = [gesture.view isKindOfClass:UIWindow.class] ? (UIWindow *)gesture.view : gesture.view.window;
+    [self presentSettingsFromController:JDXTopController(window) source:@"two_finger"];
+}
+
+- (void)openFromJDSettings:(__unused id)sender
+{
+    for (UIWindow *window in [self windows]) {
+        if (window.hidden || window.windowLevel != UIWindowLevelNormal || !window.isKeyWindow) continue;
+        UIViewController *top = JDXTopController(window);
+        if (JDXVisibleSettingsPage(top)) {
+            [self presentSettingsFromController:top source:@"jd_settings"];
+            return;
+        }
+    }
+}
+
+- (void)attachJDSettingsShortcut:(UIViewController *)controller
+{
+    if (!controller || !controller.viewIfLoaded.window) return;
+    UINavigationController *navigation = controller.navigationController;
+    BOOL hasBar = navigation && !navigation.navigationBarHidden && navigation.navigationBar.window;
+    UIViewController *itemOwner = navigation.visibleViewController ?: controller;
+    UIButton *floating = objc_getAssociatedObject(controller, &JDXFloatingShortcutKey);
+    if (floating) floating.hidden = hasBar;
+    if (hasBar) {
+        UIBarButtonItem *item = objc_getAssociatedObject(itemOwner, &JDXNavigationShortcutKey);
+        if (!item) {
+            item = [[UIBarButtonItem alloc] initWithTitle:@"JDX" style:UIBarButtonItemStylePlain
+                                                  target:self action:@selector(openFromJDSettings:)];
+            item.accessibilityLabel = @"JDX 插件设置";
+            objc_setAssociatedObject(itemOwner, &JDXNavigationShortcutKey, item, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        NSArray<UIBarButtonItem *> *existing = itemOwner.navigationItem.rightBarButtonItems ?: @[];
+        if (![existing containsObject:item]) {
+            NSMutableArray<UIBarButtonItem *> *items = [existing mutableCopy];
+            [items insertObject:item atIndex:0]; // Preserve JD's original buttons.
+            itemOwner.navigationItem.rightBarButtonItems = items;
+            JDXLog(@"settings_shortcut_attached", @{@"class": NSStringFromClass(controller.class),
+                                                   @"mode": @"navigation_bar"});
+        }
+        return;
+    }
+    // Nonstandard settings pages receive a visible 44pt-high, single-tap
+    // shortcut. Only a positively identified settings page is modified.
+    if (!floating) {
+        floating = [UIButton buttonWithType:UIButtonTypeSystem];
+        [floating setTitle:@"JDX 设置" forState:UIControlStateNormal];
+        floating.accessibilityLabel = @"打开 JDX 插件设置";
+        floating.backgroundColor = UIColor.secondarySystemBackgroundColor;
+        floating.tintColor = UIColor.systemBlueColor;
+        floating.layer.cornerRadius = 12;
+        floating.layer.borderWidth = 1;
+        floating.layer.borderColor = UIColor.separatorColor.CGColor;
+        floating.translatesAutoresizingMaskIntoConstraints = NO;
+        [floating addTarget:self action:@selector(openFromJDSettings:)
+            forControlEvents:UIControlEventTouchUpInside];
+        [controller.view addSubview:floating];
+        [NSLayoutConstraint activateConstraints:@[
+            [floating.topAnchor constraintEqualToAnchor:controller.view.safeAreaLayoutGuide.topAnchor constant:8],
+            [floating.trailingAnchor constraintEqualToAnchor:controller.view.safeAreaLayoutGuide.trailingAnchor constant:-12],
+            [floating.widthAnchor constraintGreaterThanOrEqualToConstant:104],
+            [floating.heightAnchor constraintEqualToConstant:44]
+        ]];
+        objc_setAssociatedObject(controller, &JDXFloatingShortcutKey, floating, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        JDXLog(@"settings_shortcut_attached", @{@"class": NSStringFromClass(controller.class),
+                                               @"mode": @"fallback_button"});
+    }
+    floating.hidden = NO;
+    [controller.view bringSubviewToFront:floating];
+}
+
 - (void)observePage
 {
-    if (!JDXDiagnosticsEnhanced()) return;
-    for (UIWindow *window in [self windows]) if (window.isKeyWindow) {
+    BOOL enhanced = JDXDiagnosticsEnhanced();
+    for (UIWindow *window in [self windows]) {
+        if (window.hidden || window.windowLevel != UIWindowLevelNormal || !window.isKeyWindow) continue;
         UIViewController *controller = JDXTopController(window);
-        if (controller && ![controller isKindOfClass:JDXSettingsController.class] &&
+        if (!controller || !controller.viewIfLoaded.window) continue;
+        UIViewController *settingsPage = JDXVisibleSettingsPage(controller);
+        if (settingsPage) [self attachJDSettingsShortcut:settingsPage];
+        if (enhanced && ![controller isKindOfClass:JDXSettingsController.class] &&
             ![controller.navigationController.viewControllers.firstObject isKindOfClass:JDXSettingsController.class])
             JDXRecordPage(NSStringFromClass(controller.class));
     }
 }
+
 @end
 
 void JDXInstallSettingsEntry(void)
@@ -353,8 +448,8 @@ void JDXInstallSettingsEntry(void)
         UIApplicationDidBecomeActiveNotification, UIApplicationDidFinishLaunchingNotification])
         [center addObserver:JDXEntry selector:@selector(refresh:) name:name object:nil];
     [JDXEntry refresh:nil];
-    JDXEntry.timer = [NSTimer scheduledTimerWithTimeInterval:2 repeats:YES block:^(__unused NSTimer *timer) {
+    JDXEntry.timer = [NSTimer scheduledTimerWithTimeInterval:1 repeats:YES block:^(__unused NSTimer *timer) {
         [JDXEntry observePage];
     }];
-    JDXEntry.timer.tolerance = 1;
+    JDXEntry.timer.tolerance = 0.3;
 }

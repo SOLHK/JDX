@@ -4,7 +4,7 @@
 #define JDX_CONFIG_H
 
 #ifndef JDX_BUILD_VERSION
-#define JDX_BUILD_VERSION "0.2.0"
+#define JDX_BUILD_VERSION "0.2.1"
 #endif
 
 typedef NS_ENUM(NSUInteger, JDXRule) {

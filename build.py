@@ -20,7 +20,7 @@ from pathlib import Path
 
 BUNDLE_ID = "com.360buy.jdmobile"
 PACKAGE = "com.solhk.jdx"
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 NAME = "JDX"
 ARCH = "iphoneos-arm64"
 MIN_IOS = "15.0"

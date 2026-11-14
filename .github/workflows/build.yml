@@ -32,6 +32,11 @@ jobs:
         run: |
           xcrun clang -fobjc-arc -fblocks -fobjc-exceptions -Wall -Wextra -Werror -framework Foundation tests/test_config.m -o build/test_config
           build/test_config
+      - name: Test JD settings page matching
+        if: ${{ !cancelled() }}
+        run: |
+          xcrun clang -fobjc-arc -fblocks -Wall -Wextra -Werror -framework Foundation tests/test_settings_page.m -o build/test_settings_page
+          build/test_settings_page
       - name: Build arm64 library and rootless package
         run: python3 build.py --toolchain xcode --build-dir build --output dist
       - name: Verify native code signature
