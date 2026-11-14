@@ -23,10 +23,12 @@ jobs:
           xcrun clang -fobjc-arc -fblocks -fobjc-exceptions -Wall -Wextra -Werror -framework Foundation tests/test_diagnostics.m -o build/test_diagnostics
           build/test_diagnostics
       - name: Test search filtering with native Foundation
+        if: ${{ !cancelled() }}
         run: |
           xcrun clang -fobjc-arc -fblocks -fobjc-exceptions -Wall -Wextra -Werror -I. -framework Foundation JDXSearchFilter.m tests/test_search_filter.m -o build/test_search_filter
           build/test_search_filter
       - name: Test preferences with native Foundation
+        if: ${{ !cancelled() }}
         run: |
           xcrun clang -fobjc-arc -fblocks -fobjc-exceptions -Wall -Wextra -Werror -framework Foundation tests/test_config.m -o build/test_config
           build/test_config

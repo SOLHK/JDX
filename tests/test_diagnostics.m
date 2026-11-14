@@ -183,6 +183,29 @@ static void TestRotationAndBounds(NSURL *directory)
         NSError *error = nil;
         latest = JDXExportDiagnostics(@{@"export_number": @(index)}, &error);
         CHECK(latest != nil && error == nil, "repeated exports succeed");
+        CHECK([NSFileManager.defaultManager fileExistsAtPath:latest.path], "each current export survives cleanup immediately");
+        // Distinct URL representations refer to the same direct child. The
+        // production cleanup must not depend on NSURL object equality when
+        // Foundation enumerates a relative/base URL for an absolute URL.
+        NSURL *relative = [NSURL URLWithString:[@"./" stringByAppendingString:latest.lastPathComponent]
+                                  relativeToURL:directory];
+        NSURL *absolute = [NSURL fileURLWithPath:latest.path];
+        CHECK(relative.baseURL != nil && absolute.baseURL == nil, "regression exercises relative and absolute URL representations");
+        CHECK([relative.lastPathComponent isEqual:absolute.lastPathComponent], "same-directory filename is stable across URL representations");
+        NSData *relativeData = [NSData dataWithContentsOfURL:relative];
+        NSData *absoluteData = [NSData dataWithContentsOfURL:absolute];
+        CHECK(relativeData != nil && [relativeData isEqual:absoluteData], "relative and absolute URLs read the same retained export");
+        NSArray *listed = [NSFileManager.defaultManager contentsOfDirectoryAtURL:directory
+            includingPropertiesForKeys:nil options:0 error:NULL];
+        NSURL *enumerated = nil;
+        NSUInteger retained = 0;
+        for (NSURL *candidate in listed) {
+            if ([candidate.lastPathComponent hasPrefix:@"JDX-diagnostics-"]) retained++;
+            if ([candidate.lastPathComponent isEqual:latest.lastPathComponent]) enumerated = candidate;
+        }
+        CHECK(retained <= 3, "cache cap holds after each export even when old timestamps are in the future");
+        CHECK(enumerated != nil && [[NSData dataWithContentsOfURL:enumerated] isEqual:absoluteData],
+              "directory-enumerated URL identifies the same current export");
     }
     files = [NSFileManager.defaultManager contentsOfDirectoryAtURL:directory includingPropertiesForKeys:nil options:0 error:NULL];
     NSUInteger exports = 0;

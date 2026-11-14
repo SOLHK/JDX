@@ -472,25 +472,26 @@ NSURL *JDXExportDiagnostics(NSDictionary *state, NSError **error)
             // to the user's chosen destination and are never touched here.
             NSArray *files = [NSFileManager.defaultManager contentsOfDirectoryAtURL:directory
                 includingPropertiesForKeys:@[NSURLContentModificationDateKey] options:0 error:NULL];
-            NSMutableArray *exports = [NSMutableArray array];
+            NSMutableArray *previousExports = [NSMutableArray array];
             for (NSURL *candidate in files)
                 if ([candidate.lastPathComponent hasPrefix:@"JDX-diagnostics-"] &&
-                    [candidate.pathExtension isEqualToString:@"json"])
-                    [exports addObject:candidate];
-            [exports sortUsingComparator:^NSComparisonResult(NSURL *left, NSURL *right) {
-                // Keep the export being handed to the share sheet first even
-                // when timestamps tie or the device clock moved backwards.
-                if ([left isEqual:right]) return NSOrderedSame;
-                if ([left isEqual:result]) return NSOrderedAscending;
-                if ([right isEqual:result]) return NSOrderedDescending;
+                    [candidate.pathExtension isEqualToString:@"json"] &&
+                    ![candidate.lastPathComponent isEqualToString:name])
+                    [previousExports addObject:candidate];
+            // Enumeration can return a relative/base URL while `file` is an
+            // absolute file URL. NSURL object equality is not file identity.
+            // All candidates are direct children of this one directory, so
+            // their unique filenames identify the current export reliably.
+            // Reserve its slot first, then retain only two previous exports.
+            [previousExports sortUsingComparator:^NSComparisonResult(NSURL *left, NSURL *right) {
                 NSDate *a = nil, *b = nil;
                 [left getResourceValue:&a forKey:NSURLContentModificationDateKey error:NULL];
                 [right getResourceValue:&b forKey:NSURLContentModificationDateKey error:NULL];
                 NSComparisonResult order = [(b ?: NSDate.distantPast) compare:(a ?: NSDate.distantPast)];
                 return order == NSOrderedSame ? [left.lastPathComponent compare:right.lastPathComponent] : order;
             }];
-            for (NSUInteger index = 3; index < exports.count; index++)
-                if (![exports[index] isEqual:result]) [NSFileManager.defaultManager removeItemAtURL:exports[index] error:NULL];
+            for (NSUInteger index = 2; index < previousExports.count; index++)
+                [NSFileManager.defaultManager removeItemAtURL:previousExports[index] error:NULL];
         }
     };
     if (dispatch_get_specific(JDXDiagQueueKey)) write(); else dispatch_sync(JDXDiagIO, write);
