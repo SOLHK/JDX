@@ -1,0 +1,114 @@
+{
+  "schema_version": 1,
+  "tool": {
+    "name": "REA",
+    "version": "6.9.0",
+    "package": "rea-agents",
+    "source": "https://github.com/morluto/rea",
+    "license": "MIT",
+    "native_provider": {
+      "name": "Rizin",
+      "version": "0.9.1"
+    }
+  },
+  "input": {
+    "format": "ipa",
+    "bundle_id": "com.360buy.jdmobile",
+    "short_version": "171204",
+    "build": "16.1.83",
+    "minimum_ios": "15.0",
+    "sha256": "761c01a4944b440d22a8c3567ab6e39aecbe9c116147749763c1c711e4a6ec1a",
+    "executable": {
+      "path": "Payload/JD4iPhone.app/JD4iPhone",
+      "sha256": "21804273ff5e6be667705a840aca63d781c8ab2d1c1a8567612bd76caee6fd3c",
+      "architecture": "arm64"
+    }
+  },
+  "artifact_records": [
+    {
+      "operation": "inspect_artifact",
+      "evidence_id": "ev_12075b19fe11064aecda1a7a2b0c2280bbff3a2228d40e7c7f4474dec533a47c"
+    },
+    {
+      "operation": "inventory_artifact",
+      "evidence_id": "ev_957836b63e312ff439e469dce6e67fc0971a62117efcc127e75dd0f3be5f47b9"
+    },
+    {
+      "operation": "project_apple_application_graph",
+      "evidence_id": "ev_883e810da5819d41b1d46414def8ab5e26b878cb64277b2c60c76b0e68356968",
+      "app_roots": [
+        "Payload/JD4iPhone.app"
+      ],
+      "inventory_complete": true
+    }
+  ],
+  "native_records": [
+    {
+      "purpose": "native-image",
+      "operation": "execute_rizin_command",
+      "command": "iIj",
+      "evidence_id": "ev_3d0612b63c2d6f5ce58f10f922e89a8681973da0757c9fa805744eed546debbe"
+    },
+    {
+      "purpose": "splash-gate",
+      "operation": "execute_rizin_command",
+      "command": "pd 88 @ 0x100402d4c",
+      "evidence_id": "ev_fd00608d23927aa01da52ec89b0594ae1682fb33fe365e11fad168520cb763b1"
+    },
+    {
+      "purpose": "splash-cold-caller",
+      "operation": "execute_rizin_command",
+      "command": "pd 40 @ 0x1004025ac",
+      "evidence_id": "ev_f03a77bd75ecde93afbdb704a082afa1fa232ec887207ff6e229fc6bc927ce05"
+    },
+    {
+      "purpose": "splash-show-caller",
+      "operation": "execute_rizin_command",
+      "command": "pd 39 @ 0x103e7f904",
+      "evidence_id": "ev_11b6a333fb4ea7ecc104d3c704b693f1096d0fd26ec915e9daa3aa8edaad1d9f"
+    },
+    {
+      "purpose": "splash-selector-dispatch",
+      "operation": "execute_rizin_command",
+      "command": "pd 4 @ 0x108241f20",
+      "evidence_id": "ev_5ffa5aaa18865f6c67fda85809443e550e20cc788ebf7a6521463fac2c5694fd"
+    },
+    {
+      "purpose": "home-top-promotion-gate",
+      "operation": "execute_rizin_command",
+      "command": "pd 30 @ 0x104116f9c",
+      "evidence_id": "ev_7c2aa9fa34facb14866733c95364ae7c5876385c53d1d5adb0ed85a87aeb2d95"
+    },
+    {
+      "purpose": "home-top-promotion-caller",
+      "operation": "execute_rizin_command",
+      "command": "pd 44 @ 0x104185c78",
+      "evidence_id": "ev_1062baa76fbbbf99afc1f5e1b44e567542e3857e09c6b130e7f1a1bf694dfc68"
+    },
+    {
+      "purpose": "home-float-916-caller",
+      "operation": "execute_rizin_command",
+      "command": "pd 22 @ 0x104186968",
+      "evidence_id": "ev_4abff7d4a671bf61e6941bf61116199ac266536a9c5b2de0e9e17e03ad063f38"
+    },
+    {
+      "purpose": "search-ad-status-caller",
+      "operation": "execute_rizin_command",
+      "command": "pd 30 @ 0x1064498a4",
+      "evidence_id": "ev_404a756a2c44cdcd5d74751cc0b9a3a5be995bfd9ad1119352d1ef80ffdf97b2"
+    },
+    {
+      "purpose": "search-top-shop-type",
+      "operation": "execute_rizin_command",
+      "command": "pd 34 @ 0x106782d70",
+      "evidence_id": "ev_40f0cc548a9b68731d7a160421c9a5bf4adbeecdc586eb377f11bcf6e301ac88"
+    },
+    {
+      "purpose": "search-view-model-insertion",
+      "operation": "execute_rizin_command",
+      "command": "pd 50 @ 0x1064022e4",
+      "evidence_id": "ev_cbdbe32ef574098d3372022a793cc888f99a906ec4db0dee562526a3dd0cd3db"
+    }
+  ],
+  "device_verification": "pending"
+}
