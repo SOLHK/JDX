@@ -1,345 +1,443 @@
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
-
 #include <string.h>
 
-// Keep the preference used by the previous builds so an existing choice carries over.
-static NSString *const JDXEnabledKey = @"com.solhk.jd-adblock.enabled";
-static void (*OriginalMyViewDidLoad)(UIViewController *, SEL);
-static NSDictionary *(*OriginalCreateSearchRows)(id, SEL, NSArray *);
-static NSString *(*OriginalSearchHeaderType)(id, SEL);
-static BOOL (*OriginalBottomBannerCanUse)(id, SEL);
-static void (*OriginalInitHomeRecommendation)(id, SEL);
-static void (*OriginalRenderDetailRecommendation)(id, SEL);
-static Class SearchProductClass;
-static Class SearchProductViewModelClass;
-static Class SearchTaroViewModelClass;
-static Class SearchSimpleViewModelClass;
+#import "JDXConfig.h"
+#import "JDXDiagnostics.h"
+#import "JDXHookRuntime.h"
+#import "JDXSearchFilter.h"
+#import "JDXSettings.h"
 
-@protocol JDXSearchProduct <NSObject>
-- (NSString *)adStatus;
-@end
+// A single translation unit also works with the original lightweight builder.
+#include "JDXDiagnostics.m"
+#include "JDXConfig.m"
+#include "JDXSearchFilter.m"
 
-@protocol JDXSearchRow <NSObject>
-- (id<JDXSearchProduct>)fsProductModel;
-- (id)correspondViewModel;
-@end
+static NSDictionary *JDXEnvironment;
+static IMP JDXOriginalSplash;
+static IMP JDXOriginalCeiling;
+static IMP JDXOriginalFloat;
+static IMP JDXOriginalFloat916;
+static IMP JDXOriginalTwoScreen;
+static IMP JDXOriginalBottomBanner;
+static IMP JDXOriginalHomeHeight;
+static IMP JDXOriginalHomeInit;
+static IMP JDXOriginalSearchRows;
+static IMP JDXOriginalSearchHeader;
+static IMP JDXOriginalBelt;
+static IMP JDXOriginalBeltTn;
+static IMP JDXOriginalSearchRecommendation;
+static IMP JDXOriginalMyCount;
+static IMP JDXOriginalDetailRender;
 
-@protocol JDXBottomBanner <NSObject>
-- (id)extension_id;
-- (NSString *)businessType;
-- (NSString *)showCondition;
-- (BOOL)homeRollBackGuideType;
-@end
-
-@protocol JDXHomeRecommendation <NSObject>
-- (UIView *)bottomCollectionView;
-@end
-
-@protocol JDXDetailRecommendation <NSObject>
-- (UIView *)view;
-@end
-
-@interface JDXSettingsViewController : UIViewController
-@end
-
-@implementation JDXSettingsViewController
-
-- (void)viewDidLoad
+static void JDXDecision(JDXRule rule, NSString *outcome, NSUInteger amount)
 {
-    [super viewDidLoad];
-    self.title = @"JDX 去广告";
-    self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
-    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc]
-        initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(close)];
-
-    UILabel *title = [[UILabel alloc] init];
-    title.text = @"启用去广告";
-    title.font = [UIFont preferredFontForTextStyle:UIFontTextStyleBody];
-    title.adjustsFontForContentSizeCategory = YES;
-
-    UISwitch *toggle = [[UISwitch alloc] init];
-    toggle.on = [NSUserDefaults.standardUserDefaults boolForKey:JDXEnabledKey];
-    toggle.accessibilityLabel = title.text;
-    [toggle addTarget:self action:@selector(saveEnabled:) forControlEvents:UIControlEventValueChanged];
-
-    UIStackView *row = [[UIStackView alloc] initWithArrangedSubviews:@[title, toggle]];
-    row.alignment = UIStackViewAlignmentCenter;
-    row.spacing = 12;
-    row.layoutMargins = UIEdgeInsetsMake(10, 16, 10, 16);
-    row.layoutMarginsRelativeArrangement = YES;
-    row.backgroundColor = UIColor.secondarySystemGroupedBackgroundColor;
-    row.layer.cornerRadius = 12;
-
-    UILabel *note = [[UILabel alloc] init];
-    note.text = @"更改已自动保存。请从后台结束京东，再重新打开使更改生效。";
-    note.textColor = UIColor.secondaryLabelColor;
-    note.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote];
-    note.adjustsFontForContentSizeCategory = YES;
-    note.numberOfLines = 0;
-
-    UIStackView *content = [[UIStackView alloc] initWithArrangedSubviews:@[row, note]];
-    content.axis = UILayoutConstraintAxisVertical;
-    content.spacing = 12;
-    content.translatesAutoresizingMaskIntoConstraints = NO;
-    [self.view addSubview:content];
-    UILayoutGuide *safe = self.view.safeAreaLayoutGuide;
-    [NSLayoutConstraint activateConstraints:@[
-        [content.topAnchor constraintEqualToAnchor:safe.topAnchor constant:16],
-        [content.leadingAnchor constraintEqualToAnchor:safe.leadingAnchor constant:20],
-        [content.trailingAnchor constraintEqualToAnchor:safe.trailingAnchor constant:-20],
-    ]];
+    JDXRecordRule(JDXRuleIdentifier(rule), outcome, amount);
 }
 
-- (void)saveEnabled:(UISwitch *)toggle
+// Every replacement invokes its own saved original exactly once. The master
+// switch and every rule are evaluated at call time, including after installation.
+static BOOL JDXBoolGate(id instance, SEL selector, IMP original, JDXRule rule)
 {
-    [NSUserDefaults.standardUserDefaults setBool:toggle.isOn forKey:JDXEnabledKey];
-}
-
-- (void)close
-{
-    [self dismissViewControllerAnimated:YES completion:nil];
-}
-
-@end
-
-static void ShowJDXSettings(UIViewController *controller, __unused SEL selector,
-                             UILongPressGestureRecognizer *gesture)
-{
-    if (gesture.state != UIGestureRecognizerStateBegan || controller.presentedViewController ||
-        !controller.viewIfLoaded.window) {
-        return;
-    }
-
-    JDXSettingsViewController *settings = [[JDXSettingsViewController alloc] init];
-    UINavigationController *navigation = [[UINavigationController alloc] initWithRootViewController:settings];
-    navigation.modalPresentationStyle = UIModalPresentationPageSheet;
-    navigation.sheetPresentationController.detents = @[UISheetPresentationControllerDetent.mediumDetent,
-                                                       UISheetPresentationControllerDetent.largeDetent];
-    [controller presentViewController:navigation animated:YES completion:nil];
-}
-
-static void MyViewDidLoad(UIViewController *controller, SEL selector)
-{
-    OriginalMyViewDidLoad(controller, selector);
-    UILongPressGestureRecognizer *press = [[UILongPressGestureRecognizer alloc]
-        initWithTarget:controller action:sel_registerName("jdx_presentSettings:")];
-    press.numberOfTouchesRequired = 2;
-    press.minimumPressDuration = 0.75;
-    press.cancelsTouchesInView = NO;
-    [controller.view addGestureRecognizer:press];
-}
-
-static Method FindMethod(const char *className, const char *selectorName, const char *encoding)
-{
-    Class cls = objc_lookUpClass(className);
-    Method method = class_getInstanceMethod(cls, sel_registerName(selectorName));
-    return method && strcmp(method_getTypeEncoding(method), encoding) == 0 ? method : NULL;
-}
-
-static BOOL DoNotShowAdvertisement(__unused id instance, __unused SEL selector)
-{
-    return NO;
-}
-
-static BOOL DoNotShowAdvertisementWithModel(__unused id instance, __unused SEL selector, __unused id model)
-{
-    return NO;
-}
-
-static NSInteger NoRecommendationItems(__unused id instance, __unused SEL selector)
-{
-    return 0;
-}
-
-static id NoAdvertisementModel(__unused id instance, __unused SEL selector)
-{
-    return nil;
-}
-
-static NSString *NoSearchRecommendations(__unused id instance, __unused SEL selector)
-{
-    return @"0";
-}
-
-static NSString *SearchHeaderType(id model, SEL selector)
-{
-    NSString *type = OriginalSearchHeaderType(model, selector);
-    return [@"adShop" isEqual:type] || [@"adSlideShop" isEqual:type] ? @"" : type;
-}
-
-static BOOL IsSponsoredSearchRow(id row)
-{
-    if ((SearchProductViewModelClass && [row isKindOfClass:SearchProductViewModelClass]) ||
-        (SearchTaroViewModelClass && [row isKindOfClass:SearchTaroViewModelClass]) ||
-        (SearchSimpleViewModelClass && [row isKindOfClass:SearchSimpleViewModelClass])) {
-        id<JDXSearchProduct> product = [(id<JDXSearchRow>)row fsProductModel];
-        if ([product isKindOfClass:SearchProductClass]) {
-            return [@"1" isEqual:[product adStatus]];
-        }
-    }
-    return NO;
-}
-
-static NSDictionary *CreateSearchRows(id controller, SEL selector, NSArray *products)
-{
-    NSDictionary *result = OriginalCreateSearchRows(controller, selector, products);
-    NSArray<NSString *> *keys = @[@"FSSProductListVMArrKey", @"FSSProductGridVMArrKey"];
-    NSHashTable *ads = [NSHashTable hashTableWithOptions:NSPointerFunctionsObjectPointerPersonality];
-    for (NSString *key in keys) {
-        NSArray *rows = result[key];
-        if (![rows isKindOfClass:NSArray.class]) {
-            continue;
-        }
-        for (id<JDXSearchRow> row in rows) {
-            if (IsSponsoredSearchRow(row)) {
-                [ads addObject:row];
-                id otherLayout = [row correspondViewModel];
-                if (otherLayout) {
-                    [ads addObject:otherLayout];
-                }
-            }
-        }
-    }
-    if (!ads.count) {
-        return result;
-    }
-
-    NSMutableDictionary *updated = nil;
-    for (NSString *key in keys) {
-        NSArray *rows = result[key];
-        if (![rows isKindOfClass:NSArray.class]) {
-            continue;
-        }
-        NSMutableArray *filtered = nil;
-        for (NSUInteger index = 0; index < rows.count; index++) {
-            id row = rows[index];
-            if ([ads containsObject:row]) {
-                if (!filtered) {
-                    filtered = [[rows subarrayWithRange:NSMakeRange(0, index)] mutableCopy];
-                }
-            } else {
-                [filtered addObject:row];
-            }
-        }
-        if (filtered) {
-            if (!updated) {
-                updated = [result mutableCopy];
-            }
-            updated[key] = filtered;
-        }
-    }
-    return updated ?: result;
-}
-
-static BOOL AllowBottomBanner(id<JDXBottomBanner> banner, SEL selector)
-{
-    if (!OriginalBottomBannerCanUse(banner, selector)) {
+    BOOL result = ((BOOL (*)(id, SEL))original)(instance, selector);
+    if (result && JDXShouldBlock(rule)) {
+        JDXDecision(rule, @"blocked", 1);
         return NO;
     }
-    id extension = [banner extension_id];
-    if (![extension isKindOfClass:NSString.class] || ![extension length]) {
-        return YES;
+    JDXDecision(rule, @"passed", 1);
+    return result;
+}
+
+static BOOL JDXModelGate(id instance, SEL selector, id model, IMP original, JDXRule rule)
+{
+    BOOL result = ((BOOL (*)(id, SEL, id))original)(instance, selector, model);
+    if (result && JDXShouldBlock(rule)) {
+        JDXDecision(rule, @"blocked", 1);
+        return NO;
     }
-    return [banner businessType].integerValue == 40 || [@"1" isEqual:[banner showCondition]] ||
-           [banner homeRollBackGuideType];
+    JDXDecision(rule, @"passed", 1);
+    return result;
 }
 
-static double NoHomeRecommendationHeight(__unused id manager, __unused SEL selector, __unused BOOL flag)
+static BOOL JDXSplash(id instance, SEL selector)
+{ return JDXBoolGate(instance, selector, JDXOriginalSplash, JDXRuleSplash); }
+static BOOL JDXCeiling(id instance, SEL selector)
+{ return JDXBoolGate(instance, selector, JDXOriginalCeiling, JDXRuleHomeCeiling); }
+static BOOL JDXFloat(id instance, SEL selector, id model)
+{ return JDXModelGate(instance, selector, model, JDXOriginalFloat, JDXRuleHomeFloat); }
+static BOOL JDXFloat916(id instance, SEL selector, id model)
+{ return JDXModelGate(instance, selector, model, JDXOriginalFloat916, JDXRuleHomeFloat916); }
+static BOOL JDXTwoScreen(id instance, SEL selector, id model)
+{ return JDXModelGate(instance, selector, model, JDXOriginalTwoScreen, JDXRuleHomeTwoScreen); }
+
+static id JDXObjectGate(id instance, SEL selector, IMP original, JDXRule rule)
 {
-    return 0;
+    id result = ((id (*)(id, SEL))original)(instance, selector);
+    if (result && JDXShouldBlock(rule)) {
+        JDXDecision(rule, @"blocked", 1);
+        return nil;
+    }
+    JDXDecision(rule, @"passed", 1);
+    return result;
 }
 
-static void InitHomeRecommendation(id<JDXHomeRecommendation> manager, SEL selector)
+static id JDXBelt(id instance, SEL selector)
+{ return JDXObjectGate(instance, selector, JDXOriginalBelt, JDXRuleSearchBeltShop); }
+static id JDXBeltTn(id instance, SEL selector)
+{ return JDXObjectGate(instance, selector, JDXOriginalBeltTn, JDXRuleSearchBeltShop); }
+
+static id JDXSearchHeader(id instance, SEL selector)
 {
-    OriginalInitHomeRecommendation(manager, selector);
-    [manager bottomCollectionView].hidden = YES;
+    id result = ((id (*)(id, SEL))JDXOriginalSearchHeader)(instance, selector);
+    if (JDXShouldBlock(JDXRuleSearchTopShop) &&
+        ([@"adShop" isEqual:result] || [@"adSlideShop" isEqual:result])) {
+        JDXDecision(JDXRuleSearchTopShop, @"blocked", 1);
+        return @"";
+    }
+    JDXDecision(JDXRuleSearchTopShop, @"passed", 1);
+    return result;
 }
 
-static void RenderDetailRecommendation(id<JDXDetailRecommendation> floor, SEL selector)
+static id JDXSearchRecommendation(id instance, SEL selector)
 {
-    OriginalRenderDetailRecommendation(floor, selector);
-    [floor view].hidden = YES;
+    id result = ((id (*)(id, SEL))JDXOriginalSearchRecommendation)(instance, selector);
+    if (JDXShouldBlock(JDXRuleSearchRecommendations) && [result isKindOfClass:NSString.class]) {
+        JDXDecision(JDXRuleSearchRecommendations, @"blocked", 1);
+        return @"0";
+    }
+    JDXDecision(JDXRuleSearchRecommendations, @"passed", 1);
+    return result;
 }
 
-static void ReplaceMethod(const char *className, const char *selectorName, const char *encoding, IMP replacement)
+static id JDXSearchRows(id instance, SEL selector, id products)
 {
-    Method method = FindMethod(className, selectorName, encoding);
-    if (method) {
-        method_setImplementation(method, replacement);
+    id result = ((id (*)(id, SEL, id))JDXOriginalSearchRows)(instance, selector, products);
+    if (!JDXShouldBlock(JDXRuleSearchProducts)) {
+        JDXDecision(JDXRuleSearchProducts, @"passed", 1);
+        return result;
+    }
+    NSUInteger removed = 0;
+    NSString *reason = nil;
+    id updated = JDXFilterSearchResult(result, &removed, &reason);
+    JDXDecision(JDXRuleSearchProducts, removed ? @"blocked" : (reason ?: @"unchanged"), removed ?: 1);
+    return updated;
+}
+
+static BOOL JDXReadBool(id instance, const char *name, BOOL *value)
+{
+    SEL selector = sel_registerName(name);
+    Method method = class_getInstanceMethod(object_getClass(instance), selector);
+    if (!method || strcmp(method_getTypeEncoding(method), "B16@0:8") != 0 ||
+        ![instance respondsToSelector:selector]) return NO;
+    *value = ((BOOL (*)(id, SEL))[instance methodForSelector:selector])(instance, selector);
+    return YES;
+}
+
+static BOOL JDXBottomBanner(id instance, SEL selector)
+{
+    BOOL original = ((BOOL (*)(id, SEL))JDXOriginalBottomBanner)(instance, selector);
+    if (!original) return original;
+    if (JDXShouldBlock(JDXRuleHomeBottomAll)) {
+        JDXDecision(JDXRuleHomeBottomAll, @"blocked", 1);
+        return NO;
+    }
+    if (!JDXShouldBlock(JDXRuleHomeBottomAdvertisement)) {
+        JDXDecision(JDXRuleHomeBottomAdvertisement, @"passed", 1);
+        return original;
+    }
+    @try {
+        id extension = JDXGetObject(instance, "extension_id");
+        id business = JDXGetObject(instance, "businessType");
+        id condition = JDXGetObject(instance, "showCondition");
+        BOOL guide = NO;
+        BOOL guideKnown = JDXReadBool(instance, "homeRollBackGuideType", &guide);
+        BOOL marked = ([extension isKindOfClass:NSString.class] && [extension length] > 0) ||
+            ([extension isKindOfClass:NSNumber.class] && [extension longLongValue] != 0);
+        BOOL businessKnown = [business isKindOfClass:NSString.class] || [business isKindOfClass:NSNumber.class];
+        BOOL conditionKnown = [condition isKindOfClass:NSString.class] || [condition isKindOfClass:NSNumber.class];
+        // Missing metadata is not evidence of advertising.
+        if (!marked || !guideKnown || !businessKnown || !conditionKnown) {
+            JDXDecision(JDXRuleHomeBottomAdvertisement, @"unknown_banner_metadata", 1);
+            return original;
+        }
+        if ([business integerValue] == 40 || [condition integerValue] == 1 || guide) {
+            JDXDecision(JDXRuleHomeBottomAdvertisement, @"functional_banner_preserved", 1);
+            return original;
+        }
+        JDXDecision(JDXRuleHomeBottomAdvertisement, @"blocked", 1);
+        return NO;
+    } @catch (__unused NSException *exception) {
+        JDXDecision(JDXRuleHomeBottomAdvertisement, @"inspection_exception", 1);
+        return original;
     }
 }
 
-__attribute__((constructor)) static void InstallJDX(void)
+@interface JDXManagedVisibility : NSObject
+@property(nonatomic) JDXRule rule;
+@property(nonatomic) BOOL applied;
+@property(nonatomic) BOOL originalHidden;
+@end
+@implementation JDXManagedVisibility
+@end
+
+static NSHashTable<UIView *> *JDXManagedViews;
+static char JDXVisibilityKey;
+
+static BOOL JDXCanApplyVisibility(JDXRule rule)
+{
+    return JDXShouldBlock(rule) && (rule != JDXRuleHomeRecommendations ||
+        (JDXOriginalHomeHeight && JDXOriginalHomeInit));
+}
+
+static void JDXApplyVisibility(UIView *view, JDXManagedVisibility *state)
+{
+    if (JDXCanApplyVisibility(state.rule)) {
+        if (!state.applied) {
+            state.originalHidden = view.hidden;
+            state.applied = YES;
+        }
+        view.hidden = YES;
+    } else if (state.applied) {
+        view.hidden = state.originalHidden;
+        state.applied = NO;
+    }
+    [view.superview setNeedsLayout];
+}
+
+static void JDXTrackView(id candidate, JDXRule rule)
+{
+    if (![candidate isKindOfClass:UIView.class]) {
+        JDXDecision(rule, @"missing_view", 1);
+        return;
+    }
+    __weak UIView *weakView = candidate;
+    void (^update)(void) = ^{
+        UIView *view = weakView;
+        if (!view) return;
+        if (!JDXManagedViews) JDXManagedViews = [NSHashTable weakObjectsHashTable];
+        JDXManagedVisibility *state = objc_getAssociatedObject(view, &JDXVisibilityKey);
+        if (!state) {
+            state = [JDXManagedVisibility new];
+            state.rule = rule;
+            objc_setAssociatedObject(view, &JDXVisibilityKey, state, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+        }
+        [JDXManagedViews addObject:view];
+        JDXApplyVisibility(view, state);
+    };
+    if (NSThread.isMainThread) update(); else dispatch_async(dispatch_get_main_queue(), update);
+}
+
+static void JDXRefreshManagedViews(void)
+{
+    for (UIView *view in JDXManagedViews.allObjects) {
+        JDXManagedVisibility *state = objc_getAssociatedObject(view, &JDXVisibilityKey);
+        if (state) JDXApplyVisibility(view, state);
+    }
+}
+
+static double JDXHomeHeight(id instance, SEL selector, BOOL flag)
+{
+    double original = ((double (*)(id, SEL, BOOL))JDXOriginalHomeHeight)(instance, selector, flag);
+    if (JDXCanApplyVisibility(JDXRuleHomeRecommendations)) {
+        JDXDecision(JDXRuleHomeRecommendations, @"height_hidden", 1);
+        return 0;
+    }
+    return original;
+}
+
+static void JDXHomeInit(id instance, SEL selector)
+{
+    ((void (*)(id, SEL))JDXOriginalHomeInit)(instance, selector);
+    @try {
+        JDXTrackView(JDXGetObject(instance, "bottomCollectionView"), JDXRuleHomeRecommendations);
+    } @catch (__unused NSException *exception) {
+        JDXDecision(JDXRuleHomeRecommendations, @"inspection_exception", 1);
+    }
+}
+
+static NSInteger JDXMyCount(id instance, SEL selector)
+{
+    NSInteger original = ((NSInteger (*)(id, SEL))JDXOriginalMyCount)(instance, selector);
+    if (JDXShouldBlock(JDXRuleMyRecommendations)) {
+        JDXDecision(JDXRuleMyRecommendations, @"blocked", original > 0 ? (NSUInteger)original : 1);
+        return 0;
+    }
+    return original;
+}
+
+static void JDXDetailRender(id instance, SEL selector)
+{
+    ((void (*)(id, SEL))JDXOriginalDetailRender)(instance, selector);
+    @try {
+        JDXTrackView(JDXGetObject(instance, "view"), JDXRuleDetailRecommendations);
+        if (JDXShouldBlock(JDXRuleDetailRecommendations))
+            JDXDecision(JDXRuleDetailRecommendations, @"view_hidden", 1);
+    } @catch (__unused NSException *exception) {
+        JDXDecision(JDXRuleDetailRecommendations, @"inspection_exception", 1);
+    }
+}
+
+typedef struct {
+    const char *className;
+    const char *selector;
+    const char *encoding;
+    IMP replacement;
+    IMP *original;
+    JDXRule rule;
+    JDXHookReceipt receipt;
+    BOOL installed;
+    NSUInteger attempts;
+} JDXHook;
+
+#define JDX_HOOK(cls, sel, enc, hook, saved, rule) \
+    { cls, sel, enc, (IMP)hook, &saved, rule, {0, NULL, NULL}, NO, 0 }
+static JDXHook JDXHooks[] = {
+    JDX_HOOK("LaunchAnimationManager", "canShowLaunchADView", "B16@0:8", JDXSplash, JDXOriginalSplash, JDXRuleSplash),
+    JDX_HOOK("JDMainPageFloatPhotoCeilingModel", "canShowCeilingPhoto", "B16@0:8", JDXCeiling, JDXOriginalCeiling, JDXRuleHomeCeiling),
+    JDX_HOOK("JDMainPageViewController", "shouldDisplayFloat:", "B24@0:8@16", JDXFloat, JDXOriginalFloat, JDXRuleHomeFloat),
+    JDX_HOOK("JDMainPageViewController", "shouldDisplayFloat916:", "B24@0:8@16", JDXFloat916, JDXOriginalFloat916, JDXRuleHomeFloat916),
+    JDX_HOOK("JDMainPageViewController", "shouldShowTwoScreenFloatViewForModel:", "B24@0:8@16", JDXTwoScreen, JDXOriginalTwoScreen, JDXRuleHomeTwoScreen),
+    JDX_HOOK("JDMainPageBottomXViewBoxModel", "mp_canUse", "B16@0:8", JDXBottomBanner, JDXOriginalBottomBanner, JDXRuleHomeBottomAdvertisement),
+    JDX_HOOK("JDURMulTabBridgeManager", "getRecommendViewHeight:", "d20@0:8B16", JDXHomeHeight, JDXOriginalHomeHeight, JDXRuleHomeRecommendations),
+    JDX_HOOK("JDURMulTabBridgeManager", "initBottomCollectionView", "v16@0:8", JDXHomeInit, JDXOriginalHomeInit, JDXRuleHomeRecommendations),
+    JDX_HOOK("FinalSearchListViewController", "p_createVMWithProductModelArray:", "@24@0:8@16", JDXSearchRows, JDXOriginalSearchRows, JDXRuleSearchProducts),
+    JDX_HOOK("FSSearchModel", "topInfoType", "@16@0:8", JDXSearchHeader, JDXOriginalSearchHeader, JDXRuleSearchTopShop),
+    JDX_HOOK("FSSearchModel", "beltAdShop", "@16@0:8", JDXBelt, JDXOriginalBelt, JDXRuleSearchBeltShop),
+    JDX_HOOK("FSSearchModel", "beltAdShopTn", "@16@0:8", JDXBeltTn, JDXOriginalBeltTn, JDXRuleSearchBeltShop),
+    JDX_HOOK("FSSearchModel", "recommendShow", "@16@0:8", JDXSearchRecommendation, JDXOriginalSearchRecommendation, JDXRuleSearchRecommendations),
+    JDX_HOOK("MyJdRecommendFloor15250", "myjd_numberOfItems", "q16@0:8", JDXMyCount, JDXOriginalMyCount, JDXRuleMyRecommendations),
+    JDX_HOOK("PDRecommendListFloor", "render", "v16@0:8", JDXDetailRender, JDXOriginalDetailRender, JDXRuleDetailRecommendations),
+};
+#undef JDX_HOOK
+
+static NSString *JDXHookStatusName(int status)
+{
+    switch (status) {
+        case JDXHookInstalledOwn: return @"installed_own";
+        case JDXHookInstalledOverride: return @"installed_override";
+        case JDXHookAlreadyInstalled: return @"already_installed";
+        case JDXHookMissingClass: return @"missing_class";
+        case JDXHookMissingMethod: return @"missing_method";
+        case JDXHookTypeMismatch: return @"type_mismatch";
+        case JDXHookFailed: return @"failed_open";
+        default: return @"not_attempted";
+    }
+}
+
+static NSDictionary *JDXHookState(JDXHook *hook)
+{
+    Class cls = objc_lookUpClass(hook->className);
+    Method method = cls ? class_getInstanceMethod(cls, sel_registerName(hook->selector)) : NULL;
+    NSString *status = JDXConfigurationCompatible() ? JDXHookStatusName(hook->receipt.status) : @"unsupported_version";
+    BOOL entryMatches = hook->installed && method && method_getImplementation(method) == hook->replacement;
+    if (hook->installed && !entryMatches) status = @"wrapped_or_replaced";
+    NSMutableDictionary *state = [@{@"class": @(hook->className), @"selector": @(hook->selector),
+        @"rule_id": JDXRuleIdentifier(hook->rule), @"status": status,
+        @"original_owner": hook->receipt.ownerName ? @(hook->receipt.ownerName) : @"",
+        @"expected_encoding": @(hook->encoding),
+        @"actual_encoding": hook->receipt.actualEncoding ? @(hook->receipt.actualEncoding) : @"",
+        @"installed": @(hook->installed), @"entry_matches": @(entryMatches),
+        @"attempts": @(hook->attempts), @"enabled": @(JDXShouldBlock(hook->rule))} mutableCopy];
+    if (hook->rule == JDXRuleHomeBottomAdvertisement) {
+        state[@"secondary_rule_id"] = JDXRuleIdentifier(JDXRuleHomeBottomAll);
+        state[@"secondary_enabled"] = @(JDXShouldBlock(JDXRuleHomeBottomAll));
+        state[@"enabled"] = @(JDXShouldBlock(hook->rule) || JDXShouldBlock(JDXRuleHomeBottomAll));
+    }
+    if (hook->rule == JDXRuleHomeRecommendations)
+        state[@"paired_hooks_ready"] = @(JDXOriginalHomeHeight && JDXOriginalHomeInit);
+    return state;
+}
+
+static BOOL JDXHomePairAvailable(void)
+{
+    Class cls = objc_lookUpClass("JDURMulTabBridgeManager");
+    Method first = class_getInstanceMethod(cls, sel_registerName("getRecommendViewHeight:"));
+    Method second = class_getInstanceMethod(cls, sel_registerName("initBottomCollectionView"));
+    return first && second && strcmp(method_getTypeEncoding(first), "d20@0:8B16") == 0 &&
+        strcmp(method_getTypeEncoding(second), "v16@0:8") == 0;
+}
+
+static void JDXInstallKnownHooks(void)
+{
+    if (!JDXConfigurationCompatible()) return;
+    for (NSUInteger index = 0; index < sizeof(JDXHooks) / sizeof(JDXHooks[0]); ++index) {
+        JDXHook *hook = &JDXHooks[index];
+        if (hook->installed || hook->attempts >= 4) continue;
+        hook->attempts++;
+        if (hook->rule == JDXRuleHomeRecommendations && !JDXHomePairAvailable()) {
+            hook->receipt.status = JDXHookFailed;
+        } else {
+            hook->installed = JDXInstallInstanceHook(hook->className, hook->selector, hook->encoding,
+                hook->replacement, hook->original, &hook->receipt);
+        }
+        JDXRecordHook(JDXHookState(hook));
+    }
+}
+
+NSDictionary *JDXRuntimeSnapshot(void)
+{
+    NSMutableArray *hooks = [NSMutableArray array];
+    NSUInteger installed = 0;
+    for (NSUInteger index = 0; index < sizeof(JDXHooks) / sizeof(JDXHooks[0]); ++index) {
+        [hooks addObject:JDXHookState(&JDXHooks[index])];
+        installed += JDXHooks[index].installed ? 1 : 0;
+    }
+    return @{@"environment": JDXEnvironment ?: @{}, @"configuration": JDXConfigurationSnapshot(),
+        @"hooks": hooks, @"installed_hooks": @(installed), @"total_hooks": @(hooks.count),
+        @"network_interception": @NO, @"device_validation": @"pending"};
+}
+
+void JDXRunDiagnostics(void)
+{
+    JDXInstallKnownHooks();
+    for (NSUInteger index = 0; index < sizeof(JDXHooks) / sizeof(JDXHooks[0]); ++index)
+        JDXRecordHook(JDXHookState(&JDXHooks[index]));
+    JDXLog(@"diagnostics_checked", @{@"compatible": @(JDXConfigurationCompatible()),
+        @"master_enabled": @(JDXMasterEnabled())});
+}
+
+static BOOL JDXKnownVersion(NSString *version, NSString *build)
+{
+    // Re-signing tools sometimes normalize the two version fields.
+    return ([version isEqual:@"171204"] && [build isEqual:@"16.1.83"]) ||
+        ([version isEqual:@"16.1.83"] && [build isEqual:@"171204"]);
+}
+
+__attribute__((constructor)) static void JDXStart(void)
 {
     @autoreleasepool {
         NSBundle *bundle = NSBundle.mainBundle;
-        if (![bundle.bundleIdentifier isEqualToString:@"com.360buy.jdmobile"] ||
-            ![[bundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] isEqual:@"171204"] ||
-            ![[bundle objectForInfoDictionaryKey:@"CFBundleVersion"] isEqual:@"16.1.83"]) {
-            return;
-        }
-
-        NSUserDefaults *preferences = NSUserDefaults.standardUserDefaults;
-        [preferences registerDefaults:@{JDXEnabledKey: @YES}];
-
-        Method viewDidLoad = FindMethod("MyJdHomeViewController", "viewDidLoad", "v16@0:8");
-        Class myController = objc_lookUpClass("MyJdHomeViewController");
-        if (viewDidLoad && class_addMethod(myController, sel_registerName("jdx_presentSettings:"),
-                                           (IMP)ShowJDXSettings, "v24@0:8@16")) {
-            OriginalMyViewDidLoad = (void (*)(UIViewController *, SEL))method_getImplementation(viewDidLoad);
-            method_setImplementation(viewDidLoad, (IMP)MyViewDidLoad);
-        }
-
-        if (![preferences boolForKey:JDXEnabledKey]) {
-            return;
-        }
-
-        ReplaceMethod("LaunchAnimationManager", "canShowLaunchADView", "B16@0:8", (IMP)DoNotShowAdvertisement);
-        ReplaceMethod("JDMainPageFloatPhotoCeilingModel", "canShowCeilingPhoto", "B16@0:8", (IMP)DoNotShowAdvertisement);
-        ReplaceMethod("JDMainPageViewController", "shouldDisplayFloat:", "B24@0:8@16", (IMP)DoNotShowAdvertisementWithModel);
-        ReplaceMethod("JDMainPageViewController", "shouldDisplayFloat916:", "B24@0:8@16", (IMP)DoNotShowAdvertisementWithModel);
-        ReplaceMethod("JDMainPageViewController", "shouldShowTwoScreenFloatViewForModel:", "B24@0:8@16", (IMP)DoNotShowAdvertisementWithModel);
-        ReplaceMethod("FSSearchModel", "beltAdShop", "@16@0:8", (IMP)NoAdvertisementModel);
-        ReplaceMethod("FSSearchModel", "beltAdShopTn", "@16@0:8", (IMP)NoAdvertisementModel);
-        ReplaceMethod("MyJdRecommendFloor15250", "myjd_numberOfItems", "q16@0:8", (IMP)NoRecommendationItems);
-        ReplaceMethod("FSSearchModel", "recommendShow", "@16@0:8", (IMP)NoSearchRecommendations);
-
-        Method searchHeader = FindMethod("FSSearchModel", "topInfoType", "@16@0:8");
-        if (searchHeader) {
-            OriginalSearchHeaderType = (NSString *(*)(id, SEL))method_getImplementation(searchHeader);
-            method_setImplementation(searchHeader, (IMP)SearchHeaderType);
-        }
-
-        SearchProductClass = objc_lookUpClass("FSSearchProductModel");
-        SearchProductViewModelClass = objc_lookUpClass("FSSearchProductViewModel");
-        SearchTaroViewModelClass = objc_lookUpClass("FSSTaroNativeVM");
-        SearchSimpleViewModelClass = objc_lookUpClass("FSSimpleProductVM");
-        Method searchRows = FindMethod("FinalSearchListViewController", "p_createVMWithProductModelArray:", "@24@0:8@16");
-        if (searchRows && SearchProductClass) {
-            OriginalCreateSearchRows = (NSDictionary *(*)(id, SEL, NSArray *))method_getImplementation(searchRows);
-            method_setImplementation(searchRows, (IMP)CreateSearchRows);
-        }
-
-        Method bottomBanner = FindMethod("JDMainPageBottomXViewBoxModel", "mp_canUse", "B16@0:8");
-        if (bottomBanner) {
-            OriginalBottomBannerCanUse = (BOOL (*)(id, SEL))method_getImplementation(bottomBanner);
-            method_setImplementation(bottomBanner, (IMP)AllowBottomBanner);
-        }
-
-        Method homeRecommendation = FindMethod("JDURMulTabBridgeManager", "initBottomCollectionView", "v16@0:8");
-        Method homeHeight = FindMethod("JDURMulTabBridgeManager", "getRecommendViewHeight:", "d20@0:8B16");
-        if (homeRecommendation && homeHeight) {
-            OriginalInitHomeRecommendation = (void (*)(id, SEL))method_getImplementation(homeRecommendation);
-            method_setImplementation(homeRecommendation, (IMP)InitHomeRecommendation);
-            method_setImplementation(homeHeight, (IMP)NoHomeRecommendationHeight);
-        }
-
-        Method detailRecommendation = FindMethod("PDRecommendListFloor", "render", "v16@0:8");
-        if (detailRecommendation) {
-            OriginalRenderDetailRecommendation = (void (*)(id, SEL))method_getImplementation(detailRecommendation);
-            method_setImplementation(detailRecommendation, (IMP)RenderDetailRecommendation);
-        }
+        NSString *identifier = bundle.bundleIdentifier ?: @"";
+        NSString *executable = [bundle objectForInfoDictionaryKey:@"CFBundleExecutable"];
+        if (![identifier isEqual:@"com.360buy.jdmobile"] &&
+            ![identifier hasPrefix:@"com.360buy.jdmobile."] &&
+            ![executable isEqual:@"JD4iPhone"]) return;
+        NSString *version = [bundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"] ?: @"";
+        NSString *build = [bundle objectForInfoDictionaryKey:@"CFBundleVersion"] ?: @"";
+        BOOL compatible = JDXKnownVersion(version, build);
+        JDXEnvironment = @{@"plugin_version": @JDX_BUILD_VERSION, @"bundle_id": identifier,
+            @"app_version": version, @"app_build": build,
+            @"ios_version": UIDevice.currentDevice.systemVersion,
+            @"compatible": @(compatible), @"architecture": @"arm64"};
+        JDXDiagnosticsStart(JDXEnvironment);
+        JDXConfigurationStart(compatible);
+        if (NSThread.isMainThread) JDXInstallKnownHooks();
+        dispatch_async(dispatch_get_main_queue(), ^{
+            JDXInstallKnownHooks();
+            JDXInstallSettingsEntry();
+            [NSNotificationCenter.defaultCenter addObserverForName:JDXConfigurationDidChangeNotification
+                object:nil queue:NSOperationQueue.mainQueue usingBlock:^(__unused NSNotification *notification) {
+                    JDXRefreshManagedViews();
+                }];
+            [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification
+                object:nil queue:NSOperationQueue.mainQueue usingBlock:^(__unused NSNotification *notification) {
+                    JDXInstallKnownHooks();
+                }];
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(2 * NSEC_PER_SEC)),
+                dispatch_get_main_queue(), ^{ JDXInstallKnownHooks(); });
+        });
     }
 }
+
+#include "JDXSettings.m"

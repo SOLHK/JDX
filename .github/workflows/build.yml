@@ -1,0 +1,47 @@
+name: Build JDX
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test release integrity checks
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Test diagnostics with native Foundation
+        run: |
+          mkdir -p build
+          xcrun clang -fobjc-arc -fblocks -fobjc-exceptions -Wall -Wextra -Werror -framework Foundation tests/test_diagnostics.m -o build/test_diagnostics
+          build/test_diagnostics
+      - name: Test search filtering with native Foundation
+        run: |
+          xcrun clang -fobjc-arc -fblocks -fobjc-exceptions -Wall -Wextra -Werror -I. -framework Foundation JDXSearchFilter.m tests/test_search_filter.m -o build/test_search_filter
+          build/test_search_filter
+      - name: Test preferences with native Foundation
+        run: |
+          xcrun clang -fobjc-arc -fblocks -fobjc-exceptions -Wall -Wextra -Werror -framework Foundation tests/test_config.m -o build/test_config
+          build/test_config
+      - name: Build arm64 library and rootless package
+        run: python3 build.py --toolchain xcode --build-dir build --output dist
+      - name: Verify native code signature
+        run: codesign --verify --strict --verbose=2 dist/JDX.dylib
+      - name: Upload verified artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: JDX-arm64-${{ github.sha }}
+          path: |
+            dist/JDX.dylib
+            dist/*.deb
+            dist/SHA256SUMS
+            dist/build-manifest.json
+          if-no-files-found: error
+          retention-days: 30
