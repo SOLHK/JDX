@@ -27,6 +27,7 @@ MIN_IOS = "15.0"
 INSTALL_DIR = "./var/jb/Library/MobileSubstrate/DynamicLibraries"
 SYSTEM_LIBRARIES = {
     "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation",
+    "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics",
     "/System/Library/Frameworks/Foundation.framework/Foundation",
     "/System/Library/Frameworks/UIKit.framework/UIKit",
     "/System/Library/Frameworks/Network.framework/Network",
@@ -291,6 +292,7 @@ def main():
         "-Werror=unguarded-availability", "-Oz", f'-DJDX_BUILD_VERSION="{VERSION}"', "-I", source.parent,
         "-c", source, "-o", obj, cwd=build)
     frameworks = ["-framework", "Foundation", "-framework", "UIKit", "-framework", "CoreFoundation",
+                  "-framework", "CoreGraphics",
                   "-framework", "Network", "-lobjc", "-lSystem"]
     if xcode:
         run(compiler, *common, "-dynamiclib", f"-Wl,-install_name,@rpath/{dylib.name}", "-Wl,-adhoc_codesign",
