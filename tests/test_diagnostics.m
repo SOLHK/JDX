@@ -59,6 +59,7 @@ static void TestPrivacyAndMetadata(void)
     JDXLog(@"metadata_test", @{
         @"rule_id": @"search.sponsoredProducts", @"selector": @"p_createVMWithProductModelArray:",
         @"actual_encoding": @"@24@0:8@16", @"status": @"safe_passthrough", @"amount": @3,
+        @"requested_active": @NO, @"requested_active_token": @"PREFIX_CANARY",
         @"token": @"TOKEN_CANARY", @"request": @"REQUEST_CANARY", @"response": @"RESPONSE_CANARY",
         @"view_text": @"VIEW_TEXT_CANARY", @"exception_reason": @"EXCEPTION_CANARY",
         @"nested": @{@"password": @"PASSWORD_CANARY", @"status": @"ok"},
@@ -70,6 +71,8 @@ static void TestPrivacyAndMetadata(void)
     CHECK([fields[@"selector"] isEqual:@"p_createVMWithProductModelArray:"], "selector metadata retained");
     CHECK([fields[@"actual_encoding"] isEqual:@"@24@0:8@16"], "ABI encoding retained");
     CHECK([fields[@"amount"] unsignedIntegerValue] == 3, "numeric metadata retained");
+    CHECK([fields[@"requested_active"] isEqual:@NO], "exact rule activity boolean is retained");
+    CHECK(fields[@"requested_active_token"] == nil, "exact metadata exception never permits sensitive suffixes");
     for (NSString *key in @[@"token", @"request", @"response", @"view_text", @"exception_reason", @"body"])
         CHECK(fields[key] == nil, "sensitive event key omitted");
     CHECK([fields[@"nested"][@"status"] isEqual:@"ok"] && fields[@"nested"][@"password"] == nil,
@@ -81,6 +84,11 @@ static void TestPrivacyAndMetadata(void)
     NSError *error = nil;
     NSURL *file = JDXExportDiagnostics(@{
         @"preferences": @{@"com.solhk.jd-adblock.enabled": @YES},
+        @"safe_mode": @YES, @"session_safe_mode": @YES, @"restart_required": @NO,
+        @"business_hooks_installed": @0,
+        @"configuration": @{@"rules": @[@{@"rule_id": @"splash", @"requested_active": @NO}]},
+        @"settings_entry": @{@"backup_visible": @YES, @"class": @"JDTabBarController"},
+        @"network_path": @{@"status": @"satisfied", @"service_connectivity": @"not_tested"},
         @"token": @"CONFIG_TOKEN_CANARY"
     }, &error);
     CHECK(file != nil && error == nil, "diagnostic export succeeds");
@@ -88,6 +96,15 @@ static void TestPrivacyAndMetadata(void)
     CHECK([report[@"configuration"][@"preferences"][@"com.solhk.jd-adblock.enabled"] boolValue],
           "preference snapshot retained");
     CHECK(report[@"configuration"][@"token"] == nil, "export configuration sanitized");
+    NSDictionary *state = report[@"configuration"];
+    CHECK([state[@"safe_mode"] boolValue] && [state[@"session_safe_mode"] boolValue] &&
+          [state[@"restart_required"] isEqual:@NO] && [state[@"business_hooks_installed"] isEqual:@0],
+          "pure startup evidence survives real JSON export");
+    CHECK([state[@"configuration"][@"rules"][0][@"requested_active"] isEqual:@NO],
+          "nested effective rule state survives real JSON export");
+    CHECK([state[@"settings_entry"][@"backup_visible"] boolValue], "entry metadata survives real JSON export");
+    CHECK([state[@"network_path"][@"service_connectivity"] isEqual:@"not_tested"],
+          "system path never claims that the service was tested");
     NSString *text = [NSString stringWithContentsOfURL:file encoding:NSUTF8StringEncoding error:NULL];
     CHECK(![text containsString:@"CANARY"], "sensitive canaries never reach exported JSON or persisted logs");
     CHECK([report[@"persisted_events"] count] > 0, "export includes asynchronous persistent events");

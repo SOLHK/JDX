@@ -7,8 +7,13 @@ NSString *const JDXConfigurationDidChangeNotification = @"com.solhk.jdx.configur
 static NSString *const JDXEnabledKey = @"com.solhk.jd-adblock.enabled";
 static NSString *const JDXEnhancedKey = @"com.solhk.jdx.enhanced-diagnostics";
 static NSString *const JDXSchemaKey = @"com.solhk.jdx.preference-schema";
+static NSString *const JDXSafeModeKey = @"com.solhk.jdx.safe-mode";
+static NSString *const JDXMigrationKey = @"com.solhk.jdx.migration.schema3";
 static _Atomic(bool) JDXMaster;
 static _Atomic(bool) JDXCompatible;
+// Fail open even if a caller asks before ConfigurationStart has run.
+static _Atomic(bool) JDXRequestedSafeMode = true;
+static _Atomic(bool) JDXSessionSafeMode = true;
 static _Atomic(bool) JDXRuleFlags[JDXRuleCount];
 
 const JDXRuleDefinition JDXRules[JDXRuleCount] = {
@@ -41,31 +46,70 @@ static NSString *JDXPreferenceKey(JDXRule rule)
 void JDXConfigurationStart(BOOL compatible)
 {
     NSUserDefaults *preferences = NSUserDefaults.standardUserDefaults;
-    BOOL migrating = [preferences integerForKey:JDXSchemaKey] < 2;
-    NSMutableDictionary *defaults = [@{JDXEnabledKey: @YES, JDXEnhancedKey: @NO} mutableCopy];
+    NSInteger previousSchema = [preferences integerForKey:JDXSchemaKey];
+    BOOL migrating = previousSchema < 3;
+    NSMutableDictionary *defaults = [@{JDXEnabledKey: @YES, JDXEnhancedKey: @NO,
+                                      JDXSafeModeKey: @YES} mutableCopy];
     for (NSUInteger index = 0; index < JDXRuleCount; ++index) {
         defaults[JDXPreferenceKey(index)] = @(JDXRules[index].recommended);
     }
     [preferences registerDefaults:defaults];
+
+    if (migrating) {
+        // 0.2.x's "block all" also removed ordinary recommendation content.
+        // Recover that exact preset, while preserving every other custom setup.
+        BOOL restoreRecommended = previousSchema == 2;
+        NSMutableDictionary *previousRules = [NSMutableDictionary dictionary];
+        for (NSUInteger index = 0; index < JDXRuleCount; ++index) {
+            BOOL enabled = [preferences boolForKey:JDXPreferenceKey(index)];
+            previousRules[JDXRuleIdentifier(index)] = @(enabled);
+            restoreRecommended = restoreRecommended && enabled;
+        }
+        NSMutableDictionary *migration = [@{@"from_schema": @(previousSchema),
+            @"to_schema": @3, @"safe_mode_default": @YES,
+            @"restored_recommended": @(restoreRecommended),
+            @"profile": restoreRecommended ? @"recommended" : @"preserved"} mutableCopy];
+        if (restoreRecommended) {
+            // Back up only plugin-owned flags, never host defaults or account data.
+            migration[@"previous_configuration"] = @{
+                @"master_enabled": @([preferences boolForKey:JDXEnabledKey]),
+                @"rules": previousRules};
+            for (NSUInteger index = 0; index < JDXRuleCount; ++index) {
+                [preferences setBool:JDXRules[index].recommended forKey:JDXPreferenceKey(index)];
+            }
+        }
+        [preferences setObject:migration forKey:JDXMigrationKey];
+        [preferences setBool:YES forKey:JDXSafeModeKey];
+        [preferences setInteger:3 forKey:JDXSchemaKey];
+    }
+
     atomic_store(&JDXCompatible, compatible);
     atomic_store(&JDXMaster, [preferences boolForKey:JDXEnabledKey]);
+    BOOL safeMode = [preferences boolForKey:JDXSafeModeKey];
+    atomic_store(&JDXRequestedSafeMode, safeMode);
+    atomic_store(&JDXSessionSafeMode, safeMode);
     for (NSUInteger index = 0; index < JDXRuleCount; ++index) {
         atomic_store(&JDXRuleFlags[index], [preferences boolForKey:JDXPreferenceKey(index)]);
     }
-    [preferences setInteger:2 forKey:JDXSchemaKey];
     JDXDiagnosticsSetEnhanced([preferences boolForKey:JDXEnhancedKey]);
     if (migrating) {
-        JDXLog(@"configuration_migrated", @{@"schema_version": @2,
-            @"profile": @"recommended", @"master_enabled": @(JDXMasterEnabled())});
+        JDXLog(@"configuration_migrated", @{@"schema_version": @3,
+            @"from_schema": @(previousSchema), @"safe_mode": @(safeMode),
+            @"restored_recommended": [preferences dictionaryForKey:JDXMigrationKey][@"restored_recommended"],
+            @"master_enabled": @(JDXMasterEnabled())});
     }
 }
 
 BOOL JDXConfigurationCompatible(void) { return atomic_load(&JDXCompatible); }
 BOOL JDXMasterEnabled(void) { return atomic_load(&JDXMaster); }
+BOOL JDXSafeModeEnabled(void) { return atomic_load(&JDXRequestedSafeMode); }
+BOOL JDXSafeModeActive(void) { return atomic_load(&JDXSessionSafeMode); }
+BOOL JDXRestartRequired(void) { return JDXSafeModeEnabled() != JDXSafeModeActive(); }
 BOOL JDXRuleEnabled(JDXRule rule) { return rule < JDXRuleCount && atomic_load(&JDXRuleFlags[rule]); }
 BOOL JDXShouldBlock(JDXRule rule)
 {
-    return JDXConfigurationCompatible() && JDXMasterEnabled() && JDXRuleEnabled(rule);
+    return !JDXSafeModeActive() && !JDXSafeModeEnabled() &&
+        JDXConfigurationCompatible() && JDXMasterEnabled() && JDXRuleEnabled(rule);
 }
 
 static void JDXAnnounceConfiguration(void)
@@ -81,6 +125,18 @@ void JDXSetMasterEnabled(BOOL enabled)
     [NSUserDefaults.standardUserDefaults setBool:enabled forKey:JDXEnabledKey];
     atomic_store(&JDXMaster, enabled);
     JDXLog(@"master_changed", @{@"enabled": @(enabled)});
+    JDXAnnounceConfiguration();
+}
+
+void JDXSetSafeModeEnabled(BOOL enabled)
+{
+    // Stop blocking before persisting/announcing so already-installed hooks
+    // become transparent as soon as the user requests a clean launch.
+    atomic_store(&JDXRequestedSafeMode, enabled);
+    [NSUserDefaults.standardUserDefaults setBool:enabled forKey:JDXSafeModeKey];
+    JDXLog(@"safe_mode_changed", @{@"safe_mode": @(enabled),
+        @"session_safe_mode": @(JDXSafeModeActive()),
+        @"restart_required": @(JDXRestartRequired())});
     JDXAnnounceConfiguration();
 }
 
@@ -120,11 +176,24 @@ void JDXApplyProfile(JDXProfile profile)
 NSDictionary *JDXConfigurationSnapshot(void)
 {
     NSMutableArray *rules = [NSMutableArray array];
+    BOOL allEnabled = YES;
+    BOOL allDisabled = YES;
+    BOOL recommended = YES;
     for (NSUInteger index = 0; index < JDXRuleCount; ++index) {
+        BOOL enabled = JDXRuleEnabled(index);
+        allEnabled = allEnabled && enabled;
+        allDisabled = allDisabled && !enabled;
+        recommended = recommended && enabled == JDXRules[index].recommended;
         [rules addObject:@{@"rule_id": JDXRuleIdentifier(index),
-            @"enabled": @(JDXRuleEnabled(index)), @"requested_active": @(JDXShouldBlock(index)),
+            @"enabled": @(enabled), @"requested_active": @(JDXShouldBlock(index)),
             @"recommended": @(JDXRules[index].recommended)}];
     }
-    return @{@"schema_version": @2, @"master_enabled": @(JDXMasterEnabled()),
-        @"compatible": @(JDXConfigurationCompatible()), @"rules": rules};
+    NSString *profile = allEnabled ? @"block_all" : (allDisabled ? @"keep_all" :
+        (recommended ? @"recommended" : @"custom"));
+    NSDictionary *migration = [NSUserDefaults.standardUserDefaults dictionaryForKey:JDXMigrationKey];
+    return @{@"schema_version": @3, @"master_enabled": @(JDXMasterEnabled()),
+        @"compatible": @(JDXConfigurationCompatible()), @"rules": rules,
+        @"safe_mode": @(JDXSafeModeEnabled()), @"session_safe_mode": @(JDXSafeModeActive()),
+        @"restart_required": @(JDXRestartRequired()), @"profile": profile,
+        @"migration": migration ?: @{}};
 }

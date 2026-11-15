@@ -20,7 +20,7 @@ from pathlib import Path
 
 BUNDLE_ID = "com.360buy.jdmobile"
 PACKAGE = "com.solhk.jdx"
-VERSION = "0.2.1"
+VERSION = "0.3.0"
 NAME = "JDX"
 ARCH = "iphoneos-arm64"
 MIN_IOS = "15.0"
@@ -29,6 +29,7 @@ SYSTEM_LIBRARIES = {
     "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation",
     "/System/Library/Frameworks/Foundation.framework/Foundation",
     "/System/Library/Frameworks/UIKit.framework/UIKit",
+    "/System/Library/Frameworks/Network.framework/Network",
     "/usr/lib/libobjc.A.dylib",
     "/usr/lib/libSystem.B.dylib",
 }
@@ -289,7 +290,8 @@ def main():
     run(compiler, *common, "-fobjc-arc", "-fblocks", "-fobjc-exceptions", "-Wall", "-Wextra", "-Werror",
         "-Werror=unguarded-availability", "-Oz", f'-DJDX_BUILD_VERSION="{VERSION}"', "-I", source.parent,
         "-c", source, "-o", obj, cwd=build)
-    frameworks = ["-framework", "Foundation", "-framework", "UIKit", "-framework", "CoreFoundation", "-lobjc", "-lSystem"]
+    frameworks = ["-framework", "Foundation", "-framework", "UIKit", "-framework", "CoreFoundation",
+                  "-framework", "Network", "-lobjc", "-lSystem"]
     if xcode:
         run(compiler, *common, "-dynamiclib", f"-Wl,-install_name,@rpath/{dylib.name}", "-Wl,-adhoc_codesign",
             f"-Wl,-platform_version,ios,{MIN_IOS},{sdk_release}", *frameworks, obj, "-o", dylib, cwd=build)
