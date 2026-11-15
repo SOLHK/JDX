@@ -57,6 +57,9 @@ static void JDXDiagInitialize(void)
 static BOOL JDXDiagSafeKey(NSString *key)
 {
     if (![key isKindOfClass:NSString.class] || !key.length || key.length > 120) return NO;
+    // This fixed boolean described a rule, but the generic "request" privacy
+    // filter used to remove it. Never broaden the exception to other keys.
+    if ([key isEqualToString:@"requested_active"]) return YES;
     NSString *lower = key.lowercaseString;
     static NSArray *forbidden;
     static NSCharacterSet *allowed;
@@ -410,7 +413,7 @@ NSString *JDXDiagnosticsSummary(void)
 {
     NSDictionary *snapshot = JDXDiagnosticsSnapshot();
     NSDictionary *enhanced = snapshot[@"enhanced"];
-    return [NSString stringWithFormat:@"本次记录 %lu 条，%lu 个 Hook；增强诊断%@（%lu/%lu）。",
+    return [NSString stringWithFormat:@"本次记录 %lu 条，%lu 项方法检查记录；增强诊断%@（%lu/%lu）。",
             (unsigned long)[snapshot[@"total_events"] unsignedIntegerValue],
             (unsigned long)[snapshot[@"hooks"] count], [enhanced[@"enabled"] boolValue] ? @"开启" : @"关闭",
             (unsigned long)[enhanced[@"records"] unsignedIntegerValue], (unsigned long)JDXDiagEnhancedLimit];

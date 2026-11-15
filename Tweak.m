@@ -8,11 +8,13 @@
 #import "JDXHookRuntime.h"
 #import "JDXSearchFilter.h"
 #import "JDXSettings.h"
+#import "JDXConnectivity.h"
 
 // A single translation unit also works with the original lightweight builder.
 #include "JDXDiagnostics.m"
 #include "JDXConfig.m"
 #include "JDXSearchFilter.m"
+#include "JDXConnectivity.m"
 
 static NSDictionary *JDXEnvironment;
 static IMP JDXOriginalSplash;
@@ -325,20 +327,36 @@ static NSString *JDXHookStatusName(int status)
     }
 }
 
+static BOOL JDXHookRequested(JDXHook *hook)
+{
+    return JDXShouldBlock(hook->rule) ||
+        (hook->rule == JDXRuleHomeBottomAdvertisement && JDXShouldBlock(JDXRuleHomeBottomAll));
+}
+
 static NSDictionary *JDXHookState(JDXHook *hook)
 {
     Class cls = objc_lookUpClass(hook->className);
     Method method = cls ? class_getInstanceMethod(cls, sel_registerName(hook->selector)) : NULL;
     NSString *status = JDXConfigurationCompatible() ? JDXHookStatusName(hook->receipt.status) : @"unsupported_version";
     BOOL entryMatches = hook->installed && method && method_getImplementation(method) == hook->replacement;
-    if (hook->installed && !entryMatches) status = @"wrapped_or_replaced";
+    if (hook->installed) {
+        if (!entryMatches) status = @"wrapped_or_replaced";
+        else if (!JDXHookRequested(hook)) status = @"installed_passthrough";
+    } else if (JDXConfigurationCompatible()) {
+        if (JDXSafeModeActive()) status = @"skipped_safe_session";
+        else if (JDXSafeModeEnabled()) status = @"paused_safe_mode";
+        else if (!JDXMasterEnabled()) status = @"disabled_master";
+        else if (!JDXHookRequested(hook)) status = @"disabled_rule";
+    }
+    const char *actualEncoding = method ? method_getTypeEncoding(method) : NULL;
     NSMutableDictionary *state = [@{@"class": @(hook->className), @"selector": @(hook->selector),
         @"rule_id": JDXRuleIdentifier(hook->rule), @"status": status,
         @"original_owner": hook->receipt.ownerName ? @(hook->receipt.ownerName) : @"",
         @"expected_encoding": @(hook->encoding),
-        @"actual_encoding": hook->receipt.actualEncoding ? @(hook->receipt.actualEncoding) : @"",
+        @"actual_encoding": actualEncoding ? @(actualEncoding) : @"",
         @"installed": @(hook->installed), @"entry_matches": @(entryMatches),
-        @"attempts": @(hook->attempts), @"enabled": @(JDXShouldBlock(hook->rule))} mutableCopy];
+        @"attempts": @(hook->attempts), @"enabled": @(JDXHookRequested(hook)),
+        @"configured_enabled": @(JDXRuleEnabled(hook->rule))} mutableCopy];
     if (hook->rule == JDXRuleHomeBottomAdvertisement) {
         state[@"secondary_rule_id"] = JDXRuleIdentifier(JDXRuleHomeBottomAll);
         state[@"secondary_enabled"] = @(JDXShouldBlock(JDXRuleHomeBottomAll));
@@ -360,10 +378,14 @@ static BOOL JDXHomePairAvailable(void)
 
 static void JDXInstallKnownHooks(void)
 {
-    if (!JDXConfigurationCompatible()) return;
+    // Pure startup is a session latch. Changing preferences, foregrounding, or
+    // exporting diagnostics must never add business hooks to a pure session.
+    if (!NSThread.isMainThread || !JDXConfigurationCompatible() ||
+        JDXSafeModeActive() || JDXSafeModeEnabled() || !JDXMasterEnabled()) return;
     for (NSUInteger index = 0; index < sizeof(JDXHooks) / sizeof(JDXHooks[0]); ++index) {
         JDXHook *hook = &JDXHooks[index];
-        if (hook->installed || hook->attempts >= 4) continue;
+        // Disabled rules must not alter host IMPs, or consume late-load retries.
+        if (!JDXHookRequested(hook) || hook->installed || hook->attempts >= 4) continue;
         hook->attempts++;
         if (hook->rule == JDXRuleHomeRecommendations && !JDXHomePairAvailable()) {
             hook->receipt.status = JDXHookFailed;
@@ -378,23 +400,32 @@ static void JDXInstallKnownHooks(void)
 NSDictionary *JDXRuntimeSnapshot(void)
 {
     NSMutableArray *hooks = [NSMutableArray array];
-    NSUInteger installed = 0;
+    NSUInteger installed = 0, active = 0;
     for (NSUInteger index = 0; index < sizeof(JDXHooks) / sizeof(JDXHooks[0]); ++index) {
-        [hooks addObject:JDXHookState(&JDXHooks[index])];
+        NSDictionary *state = JDXHookState(&JDXHooks[index]);
+        [hooks addObject:state];
         installed += JDXHooks[index].installed ? 1 : 0;
+        BOOL pairReady = JDXHooks[index].rule != JDXRuleHomeRecommendations ||
+            [state[@"paired_hooks_ready"] boolValue];
+        active += [state[@"entry_matches"] boolValue] && [state[@"enabled"] boolValue] && pairReady ? 1 : 0;
     }
     return @{@"environment": JDXEnvironment ?: @{}, @"configuration": JDXConfigurationSnapshot(),
         @"hooks": hooks, @"installed_hooks": @(installed), @"total_hooks": @(hooks.count),
+        @"business_hooks_installed": @(installed), @"active_business_hooks": @(active),
+        @"safe_mode": @(JDXSafeModeEnabled()), @"session_safe_mode": @(JDXSafeModeActive()),
+        @"restart_required": @(JDXRestartRequired()),
+        @"settings_entry": JDXSettingsEntrySnapshot(), @"network_path": JDXConnectivitySnapshot(),
         @"network_interception": @NO, @"device_validation": @"pending"};
 }
 
 void JDXRunDiagnostics(void)
 {
-    JDXInstallKnownHooks();
+    // Observing must not change the condition the user is trying to diagnose.
     for (NSUInteger index = 0; index < sizeof(JDXHooks) / sizeof(JDXHooks[0]); ++index)
         JDXRecordHook(JDXHookState(&JDXHooks[index]));
     JDXLog(@"diagnostics_checked", @{@"compatible": @(JDXConfigurationCompatible()),
-        @"master_enabled": @(JDXMasterEnabled())});
+        @"master_enabled": @(JDXMasterEnabled()), @"safe_mode": @(JDXSafeModeEnabled()),
+        @"session_safe_mode": @(JDXSafeModeActive()), @"restart_required": @(JDXRestartRequired())});
 }
 
 static BOOL JDXKnownVersion(NSString *version, NSString *build)
@@ -426,8 +457,10 @@ __attribute__((constructor)) static void JDXStart(void)
         dispatch_async(dispatch_get_main_queue(), ^{
             JDXInstallKnownHooks();
             JDXInstallSettingsEntry();
+            JDXConnectivityStart();
             [NSNotificationCenter.defaultCenter addObserverForName:JDXConfigurationDidChangeNotification
                 object:nil queue:NSOperationQueue.mainQueue usingBlock:^(__unused NSNotification *notification) {
+                    JDXInstallKnownHooks();
                     JDXRefreshManagedViews();
                 }];
             [NSNotificationCenter.defaultCenter addObserverForName:UIApplicationDidBecomeActiveNotification

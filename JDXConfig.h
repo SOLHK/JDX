@@ -4,7 +4,7 @@
 #define JDX_CONFIG_H
 
 #ifndef JDX_BUILD_VERSION
-#define JDX_BUILD_VERSION "0.2.1"
+#define JDX_BUILD_VERSION "0.3.0"
 #endif
 
 typedef NS_ENUM(NSUInteger, JDXRule) {
@@ -45,9 +45,17 @@ extern NSString *const JDXConfigurationDidChangeNotification;
 void JDXConfigurationStart(BOOL compatible);
 BOOL JDXConfigurationCompatible(void);
 BOOL JDXMasterEnabled(void);
+// The persisted choice for the next launch. Enabling it also makes installed
+// hooks pass through immediately. A session that STARTED pure stays pure when
+// the choice is disabled; restart before enabling business hooks in that case.
+BOOL JDXSafeModeEnabled(void);
+// Captured by ConfigurationStart and fixed until the next process launch.
+BOOL JDXSafeModeActive(void);
+BOOL JDXRestartRequired(void);
 BOOL JDXRuleEnabled(JDXRule rule);
 BOOL JDXShouldBlock(JDXRule rule);
 void JDXSetMasterEnabled(BOOL enabled);
+void JDXSetSafeModeEnabled(BOOL enabled);
 void JDXSetRuleEnabled(JDXRule rule, BOOL enabled);
 void JDXSetEnhancedEnabled(BOOL enabled);
 void JDXApplyProfile(JDXProfile profile);
